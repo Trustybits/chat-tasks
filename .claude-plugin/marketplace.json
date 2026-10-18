@@ -1,0 +1,6 @@
+{
+  "name": "chat-tasks",
+  "owner": { "name": "Matt" },
+  "description": "A per-chat task list with a status icon for Claude Code.",
+  "plugins": [{ "name": "chat-tasks", "source": "./" }]
+}
