@@ -38,6 +38,10 @@ declare module 'claude-code' {
       title: string
       /** The icon last written into the sidebar title, so it is renamed only on change. */
       shownIcon: string
+      /** The Tasks pane shows finished tasks. */
+      showDone: boolean
+      /** The person closed the Tasks pane; it does not auto-open again until they open it. */
+      paneDismissed: boolean
     }
   }
 }

@@ -4,14 +4,23 @@ import type { On } from 'claude-code'
 const TOOL = 'mcp__chat-tasks__tasks'
 
 /** The engine beneath the plugin: a session whose id the test can switch, and the desktop app's tools. */
-function engine(on: On, opts: { plan?: string; titles?: string[] } = {}) {
+function engine(on: On, opts: { plan?: string; titles?: string[]; opened?: string[] } = {}) {
   const who = { id: 'local_aaaaaa111' }
+  const panes: string[] = []
   let title = 'Fix login bug'
   on('session.id', () => ({ value: who.id }))
   on('session.cwd', () => ({ value: '/work' }))
   mock.clock(on)
   mock.store(on)
   on('ui.status', () => ({ value: undefined }))
+  on('session.surfaces', () => ({ value: ['desktop'] }) as never)
+  on('ui.panes', () => ({ value: panes.map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }) as never)
+  on('ui.open', ($, e) => {
+    const id = (e as unknown as { id: string }).id
+    if (!panes.includes(id)) panes.push(id)
+    opts.opened?.push(id)
+    return { value: { isPlaced: true } } as never
+  })
   on('classic.UserPromptSubmit', () => ({}))
   on('tool.call', { tool: 'ExitPlanMode' }, () => ({ result: { plan: opts.plan ?? null, isAgent: false } }) as never)
   on('tool.call', { tool: 'mcp__ccd_turn__update_plan' }, () => ({ result: 'ok' }) as never)
@@ -115,4 +124,39 @@ test('another chat can join a plan and update it', async ($, on) => {
 
   who.id = 'local_aaaaaa111'
   expect(await call($, { action: 'join', plan: name })).toContain('[done] Migrate users')
+})
+
+test('the Tasks pane docks itself once the chat has tasks, and only once', async ($, on) => {
+  const opened: string[] = []
+  engine(on, { opened })
+  await call($, { action: 'add', items: [{ title: 'Ship it', kind: 'required' }] })
+  await call($, { action: 'add', items: [{ title: 'Write notes', kind: 'optional' }] })
+  await call($, { action: 'update', items: [{ id: 't1', status: 'done' }] })
+  expect(opened).toEqual(['chat-tasks'])
+})
+
+test('the pane keeps finished tasks folded away until asked', async ($, on) => {
+  engine(on)
+  await call($, {
+    action: 'add',
+    items: [
+      { title: 'Ship it', kind: 'required' },
+      { title: 'Old step', kind: 'required', status: 'done' },
+    ],
+  })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({
+      plugin: 'chat-tasks',
+      surface,
+      component: 'Pane',
+      requestId: 'chat-tasks',
+      props: { bodyColumns: 60 } as never,
+    })
+    expect(await pane.find({ type: 'Text', text: /Ship it/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /Old step/ })).toBeUndefined()
+    await pane.press({ key: 'toggle-done' })
+    expect(await pane.find({ type: 'Text', text: /Old step/ })).toBeDefined()
+    await pane.press({ key: 'toggle-done' })
+    await pane.unmount()
+  }
 })

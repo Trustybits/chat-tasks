@@ -15,7 +15,8 @@ Claude records the steps it identifies as it works, sorted into three kinds:
   - `◐` only recommended or optional tasks are left
   - `✓` everything is done or skipped
 - **The chat's title in the desktop app's chat list** gets the same icon, updated as soon as the status changes. (In a terminal, the title picks it up when you send your next message.)
-- **`/chat-todo`** opens this chat's task list, where you can mark tasks done, skip them or reopen them.
+- **The Tasks pane** docks itself beside the chat in the desktop app once the chat has tasks. Finished tasks fold under **Show finished**, and a task's done / skip / reopen buttons appear when you hover it. Close the pane and it stays closed in that chat until you open it again.
+- **`/chat-todo`** (or the band's **Tasks** button) opens the pane.
 - **`/chat-tasks`** opens an overview of every plan, with its icon, what's left and the chats on it.
 
 ## Plans are picked up automatically

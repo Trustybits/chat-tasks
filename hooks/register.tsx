@@ -15,6 +15,8 @@ const plansAtom = atom({ plugin: 'chat-tasks', key: 'plans' } as const, [])
 const stepsAtom = atom({ plugin: 'chat-tasks', key: 'steps' } as const, [])
 const titleAtom = atom({ plugin: 'chat-tasks', key: 'title' } as const, '')
 const shownIconAtom = atom({ plugin: 'chat-tasks', key: 'shownIcon' } as const, '')
+const showDoneAtom = atom({ plugin: 'chat-tasks', key: 'showDone' } as const, false)
+const dismissedAtom = atom({ plugin: 'chat-tasks', key: 'paneDismissed' } as const, false)
 
 type Progress = 'none' | 'todo' | 'extras' | 'done'
 
@@ -211,6 +213,23 @@ async function showStatus($: EngineInterface) {
   const line = countsLine(tasks)
   $.ui.status(line === '' ? undefined : `${ICON[progressOf(tasks)]} ${line}`)
   await syncSidebar($)
+  await autoOpen($)
+}
+
+/** In the desktop app, keeps the Tasks pane docked while the chat has tasks, unless the person closed it. */
+async function autoOpen($: EngineInterface) {
+  const plan = await read($, planAtom)
+  if (plan === null || plan.tasks.length === 0) return
+  if (await read($, dismissedAtom)) return
+  if (!(await $.session.surfaces()).includes('desktop')) return
+  if ((await $.ui.panes()).some(pane => pane.id === PANE)) return
+  await $.ui.open({ id: PANE, title: 'Tasks' })
+}
+
+/** Opens the Tasks pane because the person asked, which also lets it auto-open again. */
+async function openTasks($: EngineInterface) {
+  await update($, dismissedAtom, () => false)
+  await $.ui.open({ id: PANE, title: 'Tasks' })
 }
 
 /** Renames this chat through the desktop app so its title leads with the icon. */
@@ -423,7 +442,7 @@ async function handleCommand($: EngineInterface, args: string): Promise<string> 
     await showStatus($)
     return 'Left the plan. This chat starts a new list the next time a task is added.'
   }
-  await $.ui.open({ id: PANE, title: 'Tasks' })
+  await openTasks($)
   return describe(await read($, planAtom))
 }
 
@@ -588,9 +607,15 @@ export const register: Register = on => {
           {shared ? `${plan.name}: ` : ''}
           {countsLine(tasks)}{' '}
         </Text>
-        <Button key="open-tasks" label="Tasks" onPress={() => $.ui.open({ id: PANE, title: 'Tasks' })} />
+        <Button key="open-tasks" label="Tasks" onPress={() => openTasks($)} />
       </Box>
     )
+  })
+
+  // The person closing the pane keeps it closed for this chat until they open it again.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE && e.origin.kind === 'person') await update($, dismissedAtom, () => true)
+    return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -600,45 +625,75 @@ export const register: Register = on => {
     const progress = progressOf(tasks)
     const id = await sessionId($)
     const others = plan === null ? [] : Object.entries(plan.members).filter(([who]) => who !== id).map(([, t]) => t)
+    const showDone = await read($, showDoneAtom)
+    const open = tasks.filter(t => t.status === 'open')
+    const closed = tasks.filter(t => t.status !== 'open')
+    // The desktop reveals a row's buttons on hover; a terminal has no pointer to hover with.
+    const onHover = e.surface === 'desktop'
 
     const setStatus = (taskId: string, status: TaskStatus) => () =>
       editPlan($, all => all.map(t => (t.id === taskId ? { ...t, status } : t)))
 
+    const row = (t: Task) => {
+      const scope = `chat-tasks-${t.id}`
+      return (
+        <Box key={`row-${t.id}`} hover={{ scope }}>
+          <Text dimColor={t.status !== 'open'} strikethrough={t.status === 'skipped'}>
+            {t.status === 'done' ? '✓' : t.status === 'skipped' ? '–' : '○'} {t.title}{' '}
+          </Text>
+          <Box display={onHover ? 'none' : 'flex'} {...(onHover ? { hover: { scope, display: 'flex' as const } } : {})}>
+            {t.status === 'open' ? (
+              <Box>
+                <Button key={`done-${t.id}`} label="done" onPress={setStatus(t.id, 'done')} />
+                <Text> </Text>
+                <Button key={`skip-${t.id}`} label="skip" onPress={setStatus(t.id, 'skipped')} />
+              </Box>
+            ) : (
+              <Button key={`reopen-${t.id}`} label="reopen" onPress={setStatus(t.id, 'open')} />
+            )}
+          </Box>
+        </Box>
+      )
+    }
+
     return (
       <Box flexDirection="column">
-        {plan !== null && <Text dimColor>Plan: {plan.name}</Text>}
-        {others.length > 0 && <Text dimColor>Shared with: {others.join(', ')}</Text>}
         {progress === 'none' && <Text dimColor>No tasks recorded for this chat yet.</Text>}
         {progress !== 'none' && (
           <Text color={COLOR[progress]} bold>
             {ICON[progress]} {countsLine(tasks)}
           </Text>
         )}
+        {plan !== null && (
+          <Text dimColor>
+            {plan.name}
+            {others.length > 0 ? ` · with ${others.join(', ')}` : ''}
+          </Text>
+        )}
         {KINDS.map(kind => {
-          const group = tasks.filter(t => t.kind === kind)
+          const group = open.filter(t => t.kind === kind)
           if (group.length === 0) return null
           return (
             <Box key={`group-${kind}`} flexDirection="column" marginTop={1}>
-              <Text bold>{kind.charAt(0).toUpperCase() + kind.slice(1)}</Text>
-              {group.map(t => (
-                <Box key={`row-${t.id}`}>
-                  <Text dimColor={t.status !== 'open'} strikethrough={t.status === 'skipped'}>
-                    {t.status === 'done' ? '✓' : t.status === 'skipped' ? '–' : '○'} {t.title}{' '}
-                  </Text>
-                  {t.status === 'open' ? (
-                    <Box>
-                      <Button key={`done-${t.id}`} label="done" onPress={setStatus(t.id, 'done')} />
-                      <Text> </Text>
-                      <Button key={`skip-${t.id}`} label="skip" onPress={setStatus(t.id, 'skipped')} />
-                    </Box>
-                  ) : (
-                    <Button key={`reopen-${t.id}`} label="reopen" onPress={setStatus(t.id, 'open')} />
-                  )}
-                </Box>
-              ))}
+              <Text dimColor bold>
+                {kind.charAt(0).toUpperCase() + kind.slice(1)}
+              </Text>
+              {group.map(row)}
             </Box>
           )
         })}
+        {closed.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <Button
+              key="toggle-done"
+              plain
+              dimColor
+              label={showDone ? 'Hide finished' : `Show finished (${closed.length})`}
+              onPress={() => update($, showDoneAtom, v => !v)}
+            />
+            {showDone && closed.map(row)}
+          </Box>
+        )}
       </Box>
     )
   })
